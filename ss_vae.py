@@ -2,15 +2,19 @@ import argparse
 import torch
 import torchvision.utils 
 import pyro
-from pyro.infer import SVI, Trace_ELBO
+from pyro.infer import SVI, Trace_ELBO, config_enumerate, TraceEnum_ELBO
 from pyro.optim import Adam
 from utils.custom_loss import TraceCCVAE_ELBO
-from utils.dataset_cached import setup_data_loaders, CELEBACached, CELEBA_EASY_LABELS
+
+from utils.dataset_cached import setup_data_loaders
+from utils.dataset_cached import MNISTCached
+
 from models.semisup_vae import SSVAE_CCVAE
 import numpy as np
 import os
 import random
 
+from pdb import set_trace as pb
 
 def main(args):
 
@@ -25,23 +29,24 @@ def main(args):
     random.seed(seed)
     pyro.clear_param_store()
 
-    data_loaders = setup_data_loaders(CELEBACached,
+    data_loaders = setup_data_loaders(MNISTCached,
                                       args.batch_size,
                                       sup_frac=args.sup_frac,
                                       root='./data/datasets/celeba')
 
     ss_vae = SSVAE_CCVAE(use_cuda=args.cuda,
-                         num_classes=len(CELEBA_EASY_LABELS),
-                         im_shape=CELEBACached.shape,
+                         num_classes=10,
+                         im_shape=MNISTCached.shape,
                          z_dim=args.z_dim,
-                         prior_fn=CELEBACached.prior_fn,
+                         prior_fn=MNISTCached.prior_fn,
                          class_name_fn=lambda i : str(CELEBA_EASY_LABELS[i]))
 
     adam_params = {"lr": args.learning_rate, "betas": (0.9, 0.999)}
     optim = Adam(adam_params)
 
     loss_sup = SVI(ss_vae.model, ss_vae.guide, optim, loss=TraceCCVAE_ELBO(ss_vae))
-    loss_unsup = SVI(ss_vae.model, ss_vae.guide, optim, loss=Trace_ELBO())
+    # loss_unsup = SVI(ss_vae.model, ss_vae.guide, optim, loss=Trace_ELBO())
+    loss_unsup = SVI(ss_vae.model, config_enumerate(ss_vae.guide), optim, loss=TraceEnum_ELBO())
         
     for epoch in range(0, args.num_epochs):
 
@@ -102,7 +107,7 @@ def main(args):
 
 def test(args, ss_vae, data_loaders):
 
-    im_shape = CELEBACached.shape
+    im_shape = MNISTCached.shape
 
     test_accuracy = ss_vae.accuracy(data_loaders['test'], args.cuda)
     xs = data_loaders['test'].dataset.fixed_imgs
@@ -124,7 +129,7 @@ def parser_args(parser):
                         help="use GPU(s) to speed up training")
     parser.add_argument('-n', '--num-epochs', default=95, type=int,
                         help="number of epochs to run")
-    parser.add_argument('-sup', '--sup-frac', default=1.0,
+    parser.add_argument('-sup', '--sup-frac', default=0.004,
                         type=float, help="supervised fractional amount of the data i.e. "
                                          "how many of the images have supervised labels."
                                          "Should be a multiple of train_size / batch_size")

@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torchvision.utils import make_grid, save_image
 import pyro
 import pyro.distributions as dist
@@ -7,6 +8,8 @@ import os
 from .networks import (CondPrior, Classifier,
                        CELEBADecoder, CELEBAEncoder)
 
+
+from pdb import set_trace as pb
 class SSVAE_CCVAE(torch.nn.Module):
     """
     Class that deals with the proposed M3 model
@@ -18,8 +21,12 @@ class SSVAE_CCVAE(torch.nn.Module):
         self.class_name_fn = class_name_fn
         self.num_classes = num_classes
         self.z_dim = z_dim
-        self.z_classify = num_classes
-        self.z_style = z_dim - self.z_classify
+
+        # self.z_classify = num_classes
+        # self.z_style = z_dim - self.z_classify
+        self.z_classify = z_dim
+        self.z_style = 0
+
         self.im_shape = im_shape
         self.use_cuda = use_cuda
         self.im_dim = np.prod(im_shape)
@@ -28,8 +35,8 @@ class SSVAE_CCVAE(torch.nn.Module):
         
         self.encoder = CELEBAEncoder(z_dim=self.z_dim)
         self.decoder = CELEBADecoder(z_dim=self.z_dim)
-        self.classifier = Classifier(dim=self.num_classes)
-        self.cond_prior = CondPrior(dim=self.num_classes)
+        self.classifier = Classifier(z_dim=self.z_dim, classes=self.num_classes)
+        self.cond_prior = CondPrior(z_dim=self.z_dim, classes=self.num_classes)
   
         if self.use_cuda:
             self.cuda()
@@ -64,7 +71,8 @@ class SSVAE_CCVAE(torch.nn.Module):
             pyro.sample("y", self._y_prior_fn(self.classifier(z_class.detach())), obs=ys) # detach to reduce variance of gradients
 
     def _y_prior_fn(self, alpha):
-        return dist.Bernoulli(torch.sigmoid(alpha)).to_event(1)
+        # return dist.Bernoulli(torch.sigmoid(alpha)).to_event(1)
+        return dist.Categorical(logits= alpha)
 
     def _z_prior_params(self, shape):
         ones = torch.ones(shape)
@@ -77,6 +85,9 @@ class SSVAE_CCVAE(torch.nn.Module):
         return dist.Laplace(img, torch.ones_like(img)).to_event(1)
 
     def cond_prior_fn(self, y):
+        # ============
+        y = F.one_hot(y, num_classes=self.num_classes).float()
+        # ============
         z_loc_y, z_scale_y = self.cond_prior(y)
         return self._z_prior_fn(z_loc_y, z_scale_y).to_event(1)
         
@@ -84,10 +95,12 @@ class SSVAE_CCVAE(torch.nn.Module):
         locs, scales = self.encoder(xs)
         locs, _ = locs.split([self.z_classify, self.z_style], 1)
         logits = self.classifier(locs)
-        preds = torch.round(torch.sigmoid(logits))
+        # preds = torch.round(torch.sigmoid(logits))
+        preds = torch.softmax(logits, dim=1)
         acc = None
         if ys is not None:
-            acc = (preds.eq(ys)).float().mean()
+            # acc = (preds.eq(ys)).float().mean()
+            acc = (torch.max(preds,dim=1).indices.eq(ys)).float().mean()
         return preds, acc
 
     def accuracy(self, data_loader, cuda=False):
@@ -103,10 +116,17 @@ class SSVAE_CCVAE(torch.nn.Module):
         locs, scales = self.encoder(xs)
         zs = self._z_prior_fn(*self.encoder(xs)).rsample(torch.tensor([k]))
         zs, _ = zs.split([self.z_classify, self.z_style], -1)
-        logits = self.classifier(zs.view(-1, self.z_classify))
+        try:
+            logits = self.classifier(zs.view(-1, self.z_classify))
+        except:
+            pb()
         d = self._y_prior_fn(logits)
-        ys = ys.expand(k, -1, -1).contiguous().view(-1, self.num_classes)
+        # ys = ys.expand(k, -1, -1).contiguous().view(-1, self.num_classes)
+        ys = ys[None, :].expand(k, -1).contiguous().flatten()
+
         lqy_z = d.log_prob(ys).view(k, xs.shape[0])
+        # y = torch.softmax(logits, dim=1)
+        # torch.exp(lqy_z)
         lqy_x = torch.logsumexp(lqy_z, dim=0) - np.log(k)
         return lqy_x
 

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from pdb import set_trace as pb
            
 class View(nn.Module):
     def __init__(self, size):
@@ -17,7 +18,7 @@ class CELEBAEncoder(nn.Module):
         hidden_dim=256
         self.z_dim = z_dim
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 32, 4, 2, 1), 
+            nn.Conv2d(1, 32, 4, 2, 1), 
             nn.ReLU(True),
             nn.Conv2d(32, 32, 4, 2, 1),  
             nn.ReLU(True),
@@ -54,42 +55,33 @@ class CELEBADecoder(nn.Module):
             nn.ReLU(True),
             nn.ConvTranspose2d(32, 32, 4, 2, 1),
             nn.ReLU(True),
-            nn.ConvTranspose2d(32, 3, 4, 2, 1),
+            nn.ConvTranspose2d(32, 1, 4, 2, 1),
             nn.Sigmoid()
         )
 
     def forward(self, z):
         return self.decoder(z)
 
-class Diagonal(nn.Module):
-    def __init__(self, dim):
-        super(Diagonal, self).__init__()
-        self.dim = dim
-        self.weight = nn.Parameter(torch.ones(self.dim))
-        self.bias = nn.Parameter(torch.zeros(self.dim))
-
-    def forward(self, x):
-        return x * self.weight + self.bias
 
 class Classifier(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, z_dim, classes):
         super(Classifier, self).__init__()
-        self.dim = dim
-        self.diag = Diagonal(self.dim)
+        h_dim = 500
+        self.classifier = nn.Sequential(
+            nn.Linear(z_dim, classes)
+        )
 
     def forward(self, x):
-        return self.diag(x)
+        return self.classifier(x)
 
 class CondPrior(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, z_dim, classes):
         super(CondPrior, self).__init__()
-        self.dim = dim
-        self.diag_loc_true = nn.Parameter(torch.ones(self.dim) * 2)
-        self.diag_loc_false = nn.Parameter(torch.ones(self.dim) * -2)
-        self.diag_scale_true = nn.Parameter(torch.ones(self.dim))
-        self.diag_scale_false = nn.Parameter(torch.ones(self.dim))
+        h_dim = 500
+        self.locs = nn.Linear(classes, z_dim)
+        self.scales = nn.Linear(classes, z_dim)
 
     def forward(self, x):
-        loc = x * self.diag_loc_true + (1 - x) * self.diag_loc_false
-        scale = x * self.diag_scale_true + (1 - x) * self.diag_scale_false
-        return loc, torch.clamp(F.softplus(scale), min=1e-3)
+        return self.locs(x), torch.clamp(F.softplus(self.scales(x)), min=1e-3)
+     
+
